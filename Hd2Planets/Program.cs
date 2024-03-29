@@ -12,42 +12,42 @@ namespace Hd2Planets
     internal static class Program
     {
 #if DEBUG
-        private readonly static LogEventLevel logLevel = LogEventLevel.Verbose;
+        private readonly static LogEventLevel _logLevel = LogEventLevel.Verbose;
 #else
         private readonly static LogEventLevel logLevel = LogEventLevel.Information;
 #endif
-        private static Microsoft.Extensions.Logging.ILogger pLogger;
+        private static Microsoft.Extensions.Logging.ILogger _pLogger;
 
-        private readonly static string dbPath = Path.Combine(Environment.CurrentDirectory, "planets.db");
+        private readonly static string _dbPath = Path.Combine(Environment.CurrentDirectory, "planets.db");
 
         private static void CreateLogger()
         {
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Verbose()
                 .Enrich.FromLogContext()
-                .WriteTo.Console(restrictedToMinimumLevel: logLevel)
-                .WriteTo.Debug(restrictedToMinimumLevel: logLevel)
+                .WriteTo.Console(restrictedToMinimumLevel: _logLevel)
+                .WriteTo.Debug(restrictedToMinimumLevel: _logLevel)
 #if DEBUG
                 .Enrich.WithProperty("Debug", true)
 #endif
                 .CreateLogger();
 
-            pLogger = new SerilogLoggerFactory(Log.Logger).CreateLogger("Program");
-            pLogger.LogTrace("Logger created");
+            _pLogger = new SerilogLoggerFactory(Log.Logger).CreateLogger("Program");
+            _pLogger.LogTrace("Logger created");
         }
 
         static void Main(string[] args)
         {
             CreateLogger();
 
-            if (File.Exists(dbPath))
+            if (File.Exists(_dbPath))
             {
-                File.Delete(dbPath);
+                File.Delete(_dbPath);
             }
 
-            using (SqliteDatabase db = new(dbPath, new SerilogLoggerFactory(Log.Logger).CreateLogger("Database")))
+            using (SqliteDatabase db = new(_dbPath, new SerilogLoggerFactory(Log.Logger).CreateLogger("Database")))
             {
-                db.Started += (s, e) => pLogger.LogInformation("Started");
+                db.Started += (s, e) => _pLogger.LogInformation("Started");
                 db.Completed += OnCompleted;
                 db.DownloadAndCreateDatabase().Wait();
             }
@@ -59,7 +59,7 @@ namespace Hd2Planets
 
         private static void OnCompleted(object sender, SqliteDatabaseCompletedEventArgs e)
         {
-            pLogger.LogInformation("Completed \"{objectname}\" - duration: {duration}", sender.GetType().Name, e.DurationString);
+            _pLogger.LogInformation("Completed \"{objectname}\" - duration: {duration}", sender.GetType().Name, e.DurationString);
         }
     }
 }
