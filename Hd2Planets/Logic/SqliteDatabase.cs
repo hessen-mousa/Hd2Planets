@@ -11,6 +11,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 
 namespace Hd2Planets.Logic
@@ -21,7 +23,11 @@ namespace Hd2Planets.Logic
 
         private bool _disposedValue;
         internal SqliteConnection _sqliteConnection;
-        internal string _downloadedJson;
+        private readonly string _planetsAPIAdress = "https://helldiverstrainingmanual.com/api/v1/planets";
+        private readonly string _campignsAPIAdress = "https://helldiverstrainingmanual.com/api/v1/war/campaign#downloadJSON=true";
+
+        internal string _downloadedPlanetsJson;
+        internal string _downloadedCampaignsJson;
         internal ILogger _logger;
         #endregion
 
@@ -29,6 +35,7 @@ namespace Hd2Planets.Logic
 
         public string DatabasePath { get; init; }
         public List<Planet> Planets { get; private set; }
+        public List<Campaign> Campaigns { get; private set; }
 
         #endregion
 
@@ -48,7 +55,7 @@ namespace Hd2Planets.Logic
         #endregion
 
         #region DB init
-        private async Task<bool> OpenDatabaseConnection()
+        private async Task<bool> OpenDBConnection()
         {
             if (this._sqliteConnection != null)
             {
@@ -66,7 +73,7 @@ namespace Hd2Planets.Logic
             return this._sqliteConnection.State == System.Data.ConnectionState.Open;
         }
 
-        private async Task CloseDatabaseConnection()
+        private async Task CloseDBConnection()
         {
             if (this._sqliteConnection == null)
             {
@@ -78,9 +85,9 @@ namespace Hd2Planets.Logic
             this._sqliteConnection = null;
         }
 
-        private async Task<bool> CreateDatabase()
+        private async Task<bool> CreateDBTabels()
         {
-            bool[] tablesCreated = new bool[5];
+            bool[] tablesCreated = new bool[6];
 
             using (SqliteTransaction t = this._sqliteConnection.BeginTransaction())
             {
@@ -114,27 +121,36 @@ namespace Hd2Planets.Logic
                     await cmd.ExecuteNonQueryAsync();
                 }
 
+                using (SqliteCommand cmd = this._sqliteConnection.CreateCommand())
+                {
+                    cmd.CommandText = @"CREATE TABLE campaigns (
+                                                id INTEGER PRIMARY KEY,
+                                                faction TEXT,
+                                                players INTEGER,
+                                                health REAL,
+                                                maxHealth REAL,
+                                                percentage REAL,
+                                                defense BOOLEAN,
+                                                majorOrder BOOLEAN,
+                                                expireDateTime INTEGER,
+                                                planetId INTEGER,
+                                                FOREIGN KEY(planetId) REFERENCES planets(id));";
+                    await cmd.ExecuteNonQueryAsync();
+                }
                 await t.CommitAsync();
 
-                KeyValuePair<int, string>[] tables = [
-                        new KeyValuePair<int,string>(0, "environments"),
-                        new KeyValuePair<int,string>(1, "biomes"),
-                        new KeyValuePair<int,string>(2, "planets"),
-                        new KeyValuePair<int,string>(3, "environmentsMapping"),
-                        new KeyValuePair<int,string>(4, "sectors"),
-                        ];
-
-                tablesCreated[0] = await DoesDatabaseTableExist("environments");
-                tablesCreated[1] = await DoesDatabaseTableExist("biomes");
-                tablesCreated[2] = await DoesDatabaseTableExist("planets");
-                tablesCreated[3] = await DoesDatabaseTableExist("environmentsMapping");
-                tablesCreated[4] = await DoesDatabaseTableExist("sectors");
+                tablesCreated[0] = await DoesDBTableExist("environments");
+                tablesCreated[1] = await DoesDBTableExist("biomes");
+                tablesCreated[2] = await DoesDBTableExist("planets");
+                tablesCreated[3] = await DoesDBTableExist("environmentsMapping");
+                tablesCreated[4] = await DoesDBTableExist("sectors");
+                tablesCreated[5] = await DoesDBTableExist("campaigns");
             }
 
             return tablesCreated.All(x => x);
         }
 
-        private async Task<bool> DoesDatabaseTableExist(string tablename)
+        private async Task<bool> DoesDBTableExist(string tablename)
         {
             using (SqliteCommand cmd = this._sqliteConnection.CreateCommand())
             {
@@ -298,6 +314,46 @@ namespace Hd2Planets.Logic
             }
         }
 
+
+        private async Task InsertCampaigns(IList<Campaign> campaigns)
+        {
+            using (SqliteTransaction t = this._sqliteConnection.BeginTransaction())
+            {
+                foreach (Campaign c in campaigns)
+                {
+                    int planetId = 0;
+
+                    if (c.CampaignPlanet != null)
+                    {
+                        using (SqliteCommand cmd = this._sqliteConnection.CreateCommand())
+                        {
+                            cmd.CommandText = "SELECT id FROM planets WHERE `index` = @planetindex;";
+                            cmd.Parameters.AddWithValue("@planetindex", c.CampaignPlanet.Index);
+                            planetId = int.Parse((await cmd.ExecuteScalarAsync()).ToString());
+                        }
+                    }
+
+                    using (SqliteCommand cmd = this._sqliteConnection.CreateCommand())
+                    {
+                        cmd.CommandText = "INSERT INTO campaigns (faction, players, health, maxHealth, percentage, defense, majorOrder, expireDateTime, planetId) VALUES (@faction, @players, @health, @maxHealth, @percentage, @defense, @majorOrder, @expireDateTime, @planetId);";
+
+                        cmd.Parameters.AddWithValue("@faction", c.Faction);
+                        cmd.Parameters.AddWithValue("@players", c.Players);
+                        cmd.Parameters.AddWithValue("@health", c.Health);
+                        cmd.Parameters.AddWithValue("@maxHealth", c.MaxHealth);
+                        cmd.Parameters.AddWithValue("@percentage", (double)c.Percentage);
+                        cmd.Parameters.AddWithValue("@defense", c.Defense ? 1 : 0); 
+                        cmd.Parameters.AddWithValue("@majorOrder", c.MajorOrder ? 1 : 0);
+                        cmd.Parameters.AddWithValue("@expireDateTime", c.ExpireDateTimeEpochFormat);
+                        cmd.Parameters.AddWithValue("@planetId", planetId == default ? DBNull.Value : planetId);
+
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+
+                await t.CommitAsync();
+            }
+        }
         #endregion
 
         #region Custom Methods
@@ -320,7 +376,7 @@ namespace Hd2Planets.Logic
         #endregion
 
         #region Json Methods
-        private static IEnumerable<Planet> DeserializeJson(string json)
+        private static IEnumerable<Planet> DeserializePlanetsJson(string json)
         {
             if (string.IsNullOrEmpty(json))
             {
@@ -346,18 +402,55 @@ namespace Hd2Planets.Logic
             }
         }
 
+        private static IEnumerable<Campaign> DeserializeCampaignsJson(string json)
+        {
+            if (string.IsNullOrEmpty(json))
+            {
+                yield break;
+            }
+
+            JArray l = JArray.Parse(json);
+
+            foreach ( JToken p in l)
+            {
+                yield return new Campaign()
+                {
+                    CampaignPlanet = new() {
+                        Index = int.Parse(p["planetIndex"].ToString()),
+                    },
+                    Faction = p["faction"].ToString(),
+                    Players = int.Parse(p["players"].ToString()),
+                    Health = int.Parse(p["health"].ToString()),
+                    MaxHealth = int.Parse(p["maxHealth"].ToString()),
+                    Percentage = double.Parse(p["percentage"].ToString()),
+                    Defense = bool.Parse(p["defense"].ToString()),
+                    MajorOrder = bool.Parse(p["majorOrder"].ToString()),
+                    ExpireDateTimeEpochFormat = p["expireDateTime"].HasValues ? long.Parse(p["expireDateTime"].ToString()) : default,
+                };
+            }
+        }
+
         private async Task<bool> DownloadJson()
         {
             using (HttpClient client = new())
             {
-                HttpResponseMessage response = await client.GetAsync("https://helldiverstrainingmanual.com/api/v1/planets");
+                HttpResponseMessage planetsResponse = await client.GetAsync(_planetsAPIAdress);
 
-                if (response.StatusCode != System.Net.HttpStatusCode.OK)
+                if (planetsResponse.StatusCode != System.Net.HttpStatusCode.OK)
                 {
                     return false;
                 }
 
-                this._downloadedJson = await response.Content.ReadAsStringAsync();
+                this._downloadedPlanetsJson = await planetsResponse.Content.ReadAsStringAsync();
+
+                HttpResponseMessage campaignResponse = await client.GetAsync(_campignsAPIAdress);
+
+                if (campaignResponse.StatusCode != System.Net.HttpStatusCode.OK)
+                {
+                    return false;
+                }
+
+                this._downloadedCampaignsJson = await campaignResponse.Content.ReadAsStringAsync();
             }
 
             return true;
@@ -373,12 +466,16 @@ namespace Hd2Planets.Logic
 
             if (!await this.DownloadJson())
             {
-                this._logger?.LogError("Failed to download JSON from API");
+                this._logger?.LogError("Failed to download JSON from APIs");
                 return;
             }
 
-            this.Planets = DeserializeJson(this._downloadedJson).ToList();
+            this.Planets = DeserializePlanetsJson(this._downloadedPlanetsJson).ToList();
+            this.Campaigns = DeserializeCampaignsJson(this._downloadedCampaignsJson).ToList();
+
             this._logger?.LogInformation("Planets received: {count}", this.Planets.Count);
+            this._logger?.LogInformation("Campaigns received: {count}", this.Campaigns.Count);
+
 
             if (this.Planets == null || this.Planets.Count == 0)
             {
@@ -395,13 +492,13 @@ namespace Hd2Planets.Logic
             HashSet<string> sectors = this.Planets.Where(x => x.Sector != null).GroupBy(x => x.Sector).Select(x => x.Key).ToHashSet();
             this._logger?.LogInformation("Unique sectors: {count}", sectors.Count);
 
-            if (!await this.OpenDatabaseConnection())
+            if (!await this.OpenDBConnection())
             {
                 this._logger?.LogError("Failed to open database connection");
                 return;
             }
 
-            if (!await this.CreateDatabase())
+            if (!await this.CreateDBTabels())
             {
                 this._logger?.LogError("Failed to create database");
                 return;
@@ -415,7 +512,9 @@ namespace Hd2Planets.Logic
 
             await this.InsertEnvironmentMapping(this.Planets);
 
-            await this.CloseDatabaseConnection();
+            await this.InsertCampaigns(this.Campaigns);
+
+            await this.CloseDBConnection();
 
             sw.Stop();
 
