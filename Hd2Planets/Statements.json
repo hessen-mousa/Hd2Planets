@@ -1,0 +1,40 @@
+﻿SELECT
+	a.id,
+	a.`index`,
+	a.name,
+	e.name AS sector,
+	b.slug AS biome,
+	b.description AS biomeDescription,
+	group_concat(d.name, ', ') AS environmentals
+FROM planets AS a
+LEFT JOIN biomes AS b ON a.biome=b.id
+LEFT JOIN environmentsMapping AS c ON c.planet=a.id
+LEFT JOIN environments AS d ON d.id=c.env
+LEFT JOIN sectors AS e ON a.sector=e.id
+GROUP BY a.id;
+
+SELECT
+	b.name AS `planetname`,
+	count(b.id) AS planetcount
+FROM planets AS a
+LEFT JOIN sectors AS b ON a.sector=b.id
+GROUP BY b.id
+ORDER BY count(b.id) DESC, b.name;
+
+SELECT
+	a.name AS planetname,
+	count(a.id) AS planetcount
+FROM sectors AS a
+LEFT JOIN planets AS b ON a.id=b.sector
+GROUP BY a.id
+ORDER BY count(a.id) DESC, a.name;
+
+SELECT
+	c.name AS `environement`,
+	count(b.id) AS `planetcount`,
+	group_concat(b.name, ', ') AS `planets`
+FROM environmentsMapping AS a
+LEFT JOIN planets AS b ON a.planet=b.id
+LEFT JOIN environments AS c ON a.env=c.id
+GROUP BY a.env
+ORDER BY count(b.id) DESC;
